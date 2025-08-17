@@ -1,0 +1,6 @@
+langchain
+langgraph
+langchain_google_genai
+dotenv
+langchain_community
+langchain_experimental
