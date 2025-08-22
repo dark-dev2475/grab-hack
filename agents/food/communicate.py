@@ -97,55 +97,57 @@ def offer_promotional_voucher(customer_id: str, amount: float, expiry_days: int)
     }
 
 def communicate(state: MessagesState) -> Command[Literal['grab_food']]:
-    """
-    Communicates with the customer after an issue has been resolved.
-    Handles notifications, satisfaction surveys, and promotional vouchers.
-    
-    Args:
-        state: The current state containing message history
-        
-    Returns:
-        Command to go back to the grab_food agent
-    """
-    # Create a system message to guide the agent
+    """Enhanced communication with personalization"""
+    # Create a more detailed system message
     system_message = """
     You are a Grab Food customer communication agent.
-    Your task is to provide clear, concise, and empathetic communication to customers
-    after an issue has been resolved.
     
-    Follow these steps:
-    1. Send a resolution notification to the customer
-    2. Issue a satisfaction survey if appropriate
-    3. Offer a promotional voucher if the customer experienced significant inconvenience
+    Your task is to provide personalized, empathetic communication tailored to:
+    1. The specific issue the customer experienced
+    2. Their order history and loyalty status
+    3. The severity of the inconvenience they faced
+    4. Their communication preferences
+    
+    Generate personalized messages that:
+    - Address the customer by name
+    - Reference specific details of their issue
+    - Acknowledge any inconvenience in a genuine way
+    - Provide clear information about resolutions
+    - End with a forward-looking, positive note
     
     Use the available tools to complete these tasks efficiently.
     """
     
-    # Get the last message to understand what issue was resolved
-    last_message = state["messages"][-1] if state["messages"] else None
-    issue_description = last_message.content if last_message else "an issue"
+    # Extract more context from messages
+    last_messages = state["messages"][-3:] if len(state["messages"]) >= 3 else state["messages"]
+    issue_description = " ".join([m.content for m in last_messages if hasattr(m, 'content')])
     
-    # Simulate a customer ID and order ID (in a real app, these would come from the state)
+    # Get customer data (simulated)
     customer_id = "cust-12345"
     order_id = "order-67890"
+    customer_name = "Alex"  # Would come from real customer data
     
-    # Send notification about the resolution
+    # Analyze issue severity from message content (simplified)
+    is_severe = "spillage" in issue_description or "delay" in issue_description
+    
+    # Generate personalized message
+    personalized_message = f"Hello {customer_name}, we've resolved your issue regarding {issue_description}. "
+    if is_severe:
+        personalized_message += "We understand this significantly impacted your experience and sincerely apologize. "
+    personalized_message += "Thank you for your patience throughout this process."
+    
+    # Send tailored notification
     notification_result = send_resolution_notification(
         customer_id=customer_id,
-        message=f"Your issue regarding {issue_description} has been resolved. Thank you for your patience."
+        message=personalized_message
     )
     
-    # Issue a satisfaction survey
-    survey_result = issue_satisfaction_survey(
-        customer_id=customer_id,
-        order_id=order_id
-    )
-    
-    # Offer a promotional voucher for the inconvenience
+    # Offer larger voucher for severe issues
+    voucher_amount = 10.00 if is_severe else 5.00
     voucher_result = offer_promotional_voucher(
         customer_id=customer_id,
-        amount=5.00,  # $5 voucher
-        expiry_days=7  # Valid for 7 days
+        amount=voucher_amount,
+        expiry_days=7
     )
     
     # Return to grab_food after handling the communication

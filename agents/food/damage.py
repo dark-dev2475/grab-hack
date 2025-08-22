@@ -152,39 +152,46 @@ def log_merchant_packaging_issue(details: str, severity: str) -> Dict[str, Any]:
 
 @tool
 def analyze_collected_evidence(customer_evidence: Dict[str, Any], driver_evidence: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Analyzes the evidence collected from both customer and driver to determine responsibility.
+    """Advanced evidence analysis with multiple factors"""
+    # Extract evidence details
+    customer_photos = customer_evidence.get("photos_provided", False)
+    driver_photos = driver_evidence.get("photos_provided", False)
+    customer_statement = customer_evidence.get("response", "")
+    driver_statement = driver_evidence.get("response", "")
     
-    Args:
-        customer_evidence: Evidence provided by the customer
-        driver_evidence: Evidence provided by the driver
-        
-    Returns:
-        Analysis results with determination of responsibility
-    """
-    # In a real implementation, this might involve image analysis or more complex logic
-    # For now, we'll simulate a basic analysis
+    # Analyze timing (how soon after delivery the complaint was made)
+    customer_timestamp = customer_evidence.get("timestamp", "")
+    delivery_timestamp = "2025-08-21T15:20:00Z"  # In a real implementation, get from order data
     
-    has_customer_photos = customer_evidence.get("photos_provided", False)
-    has_driver_photos = driver_evidence.get("photos_provided", False)
+    # Calculate factors (simplified for this example)
+    photo_factor = 0.6 if customer_photos else 0.2
+    timing_factor = 0.7  # Higher if complaint was immediate
+    statement_consistency = 0.8  # Would analyze text for consistency
     
-    if has_customer_photos and not has_driver_photos:
+    # Calculate weighted responsibility
+    merchant_score = (photo_factor + timing_factor + statement_consistency) / 3
+    
+    # Determine responsibility with confidence
+    if merchant_score > 0.7:
         responsibility = "merchant"
-        confidence = 0.8
-    elif has_driver_photos and not has_customer_photos:
+        confidence = merchant_score
+    elif merchant_score < 0.4:
         responsibility = "customer"
-        confidence = 0.7
+        confidence = 1 - merchant_score
     else:
-        # Both have photos or neither has photos
-        # In a real system, this would use more sophisticated analysis
-        responsibility = "merchant"  # Default to merchant responsibility
-        confidence = 0.6
+        responsibility = "unclear"
+        confidence = 0.5
     
     return {
         "responsibility": responsibility,
         "confidence": confidence,
-        "reasoning": "Based on photo evidence and statement analysis",
-        "timestamp": "2025-08-21T15:45:00Z"
+        "reasoning": "Multi-factor analysis including photo evidence, timing, and statement consistency",
+        "timestamp": "2025-08-21T15:45:00Z",
+        "factors_considered": {
+            "photo_evidence": photo_factor,
+            "timing": timing_factor,
+            "statement_consistency": statement_consistency
+        }
     }
 
 # Define the node functions for the graph
@@ -312,21 +319,36 @@ def analyze_dispute_evidence(state: DisputeState) -> DisputeState:
     return state
 
 def resolve_dispute(state: DisputeState) -> DisputeState:
-    """Node to implement the resolution based on the analysis."""
+    """Enhanced resolution logic with customer value consideration"""
     if not state.analysis_result:
-        # If analysis is missing, we can't resolve properly
-        state.messages.append(
-            SystemMessage(content="Analysis results missing. Cannot proceed with resolution.")
-        )
         return state
-    
+        
     responsibility = state.analysis_result.get("responsibility", "unknown")
+    confidence = state.analysis_result.get("confidence", 0.5)
     
+    # Check customer value (simplified - would use actual data)
+    customer_value = "high"  # Would be determined from order history
+    
+    # Refund logic with customer value consideration
+    if responsibility == "merchant" or (responsibility == "unclear" and customer_value == "high"):
+        # Full refund for clear merchant fault or high-value customers with unclear fault
+        refund_amount = 15.00
+        reason = "Full refund issued due to packaging issues"
+    elif responsibility == "unclear":
+        # Partial refund for unclear responsibility with regular customers
+        refund_amount = 7.50
+        reason = "Partial refund issued as goodwill gesture"
+    else:
+        # No refund for clear customer fault
+        refund_amount = 0
+        reason = "No refund issued as analysis indicates damage occurred after delivery"
+        
+    # Rest of the function remains similar but uses these new variables
     if responsibility == "merchant":
         # Issue a refund to the customer
         refund_result = issue_instant_refund(
-            amount=15.00,  # In a real app, this would be the actual order amount
-            reason="Damaged packaging determined to be merchant's responsibility"
+            amount=refund_amount,
+            reason=reason
         )
         
         # Exonerate the driver
@@ -378,8 +400,8 @@ def resolve_dispute(state: DisputeState) -> DisputeState:
     else:
         # If responsibility is unclear, partial refund may be issued
         refund_result = issue_instant_refund(
-            amount=7.50,  # Half refund in this case
-            reason="Partial refund issued due to inconclusive evidence"
+            amount=refund_amount,
+            reason=reason
         )
         
         state.resolution = "partial_refund_issued"

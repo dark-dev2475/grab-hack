@@ -2,6 +2,7 @@
 Restaurant overload management module for Grab Food service.
 Handles situations where a restaurant is overloaded with orders.
 Uses LangGraph with proper nodes and edges for workflow control.
+
 """
 
 import os
@@ -22,7 +23,7 @@ from langgraph.graph import MessagesState, END, StateGraph, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command
-
+from types import SimpleNamespace
 # Import LLM from utils (when ready)
 from langchain_google_genai import ChatGoogleGenerativeAI
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest")
@@ -30,7 +31,7 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest")
 # State definition
 class RestaurantState(MessagesState):
     """State for restaurant overload management workflow."""
-    prep_time: int = 40  # Default to 40 minutes if not set
+    prep_time: int = 20  # Default to 20 minutes if not set
     cuisine: str = "generic"
     actions_taken: List[Dict[str, Any]] = []
     human_decisions: Dict[str, Any] = {}
@@ -42,16 +43,14 @@ class RestaurantState(MessagesState):
 # Tool definitions
 @tool
 def notify_customer(delay_minutes: int) -> str:
-    """
-    Notify the customer about long wait times and offer a voucher for the inconvenience. 
-    
-    Args:
-        delay_minutes: The expected delay in minutes
+    """Notify customer with dynamic voucher based on delay severity"""
+    voucher_amount = 0.00  # Base amount
+    if delay_minutes > 40:
+        voucher_amount = 5.00
+    if delay_minutes > 60:
+        voucher_amount = 10.00
         
-    Returns:
-        A message confirming the customer has been notified
-    """
-    return f"Customer notified about {delay_minutes} minute delay. A voucher has been offered for the inconvenience."
+    return f"Customer notified about {delay_minutes} minute delay. A ${voucher_amount:.2f} voucher has been offered for the inconvenience."
 
 @tool
 def reroute_driver(delay_minutes: int) -> str:
@@ -80,56 +79,72 @@ def suggest_alternatives(delay_minutes: int) -> str:
     return f"Customer has been provided with 3 similar restaurant alternatives with wait times under {delay_minutes//2} minutes."
 
 # Mock function to simulate human interaction
-def get_human_decision(state: RestaurantState) -> RestaurantState:
+def get_human_decision(state: dict) -> dict:
     """
     Simulate a human decision about offering alternative restaurants.
-    In a real implementation, this would be a UI interaction.
-    
-    Args:
-        state: The current state
-        
-    Returns:
-        Updated state with human decision
+    Accepts a dictionary, works with an object, and returns a dictionary.
     """
-    # Simulate human input based on delay
-    prep_time = state.prep_time
-    want_alternatives = prep_time > 30
+    # ADAPT: Convert dict to object
+    state_obj = SimpleNamespace(**state)
+
+    # WORK: Use object notation for your logic
+    want_alternatives = state_obj.prep_time > 30
     
-    # In a real implementation:
-    # want_alternatives = input(f"Delay is {prep_time} minutes. Suggest alternative restaurants? (y/n): ").lower().startswith("y")
-    
-    state.human_decisions["want_alternatives"] = want_alternatives
     if want_alternatives:
-        state.current_step = "suggest_alternatives"
+        state_obj.current_step = "suggest_alternatives"
         message = "Customer would like to see alternative restaurants"
     else:
-        state.current_step = "complete"
+        state_obj.current_step = "complete"
         message = "Customer is willing to wait for their order"
     
-    state.messages.append(FunctionMessage(content=message, name="get_human_decision"))
-    return state
+    state_obj.messages.append(FunctionMessage(content=message, name="get_human_decision"))
+
+    # RETURN: Return a dictionary of only the updated fields
+    return {
+        "human_decisions": {"want_alternatives": want_alternatives},
+        "current_step": state_obj.current_step,
+        "messages": state_obj.messages
+    }
 
 # Node functions for the LangGraph
-def analyze_situation(state: RestaurantState) -> RestaurantState:
+def analyze_situation(state: dict) -> dict:
     """
-    Analyze the restaurant overload situation and plan next steps.
+    Analyzes the situation using object notation internally, while being
+    compatible with LangGraph's dictionary-based state.
+    """
+    # 1. ADAPT: Convert the incoming dictionary to an object.
+    state_obj = SimpleNamespace(**state)
+
+    # 2. WORK: Use clean, object-style dot notation for all your logic.
+    # Enrich the context for a smarter AI response.
+    context = {
+        "prep_time": state_obj.prep_time,
+        "cuisine": state_obj.cuisine,
+        "time_of_day": getattr(state_obj, 'time_of_day', '19:00'), # Safely get, or use default
+        "customer_loyalty": getattr(state_obj, 'customer_loyalty', 'Gold')
+    }
+    situation_message = (
+        "Analyze the following restaurant overload situation:\n"
+        f"- Preparation Time: {context['prep_time']} minutes\n"
+        f"- Cuisine Type: {context['cuisine']}\n"
+        f"- Time of Day: {context['time_of_day']}\n"
+        f"- Customer Loyalty Status: {context['customer_loyalty']}"
+    )
     
-    Args:
-        state: The current state
-        
-    Returns:
-        Updated state with analysis
-    """
-    # Create a situation message
-    situation_message = f"The restaurant is overloaded with a {state.prep_time}-minute prep time for {state.cuisine} food."
-    state.messages.append(HumanMessage(content=situation_message))
+    # Append the detailed message to the history
+    state_obj.messages.append(HumanMessage(content=situation_message))
     
     # System message explaining the agent's role
     system_message = """
     You are a Grab Food order management agent handling an overloaded restaurant situation.
     
-    Analyze the current situation with the overloaded restaurant and determine the severity of the delay.
-    Based on your analysis, explain what steps should be taken.
+    Analyze the current situation by considering:
+    1. Severity of delay (< 20 min = low, 20-40 min = medium, > 40 min = high)
+    2. Type of cuisine and typical expectations for preparation time
+    3. Time of day and potential rush hour impacts
+    4. Customer order history and loyalty status
+    
+    Based on your analysis, create a detailed plan with specific justifications for each action.
     """
     
     # Generate analysis using LLM
@@ -139,76 +154,100 @@ def analyze_situation(state: RestaurantState) -> RestaurantState:
     ])
     
     chain = prompt | llm | StrOutputParser()
-    response = chain.invoke({"messages": state.messages})
+    response = chain.invoke({"messages": state_obj.messages})
     
-    # Add the analysis to the state
-    state.messages.append(AIMessage(content=response))
-    state.last_response = response
-    state.current_step = "notify"
+    # Add the AI's analysis to the message history
+    state_obj.messages.append(AIMessage(content=response))
     
-    return state
+    # 3. RETURN: Return a dictionary containing only the fields that have changed.
+    return {
+        "messages": state_obj.messages,
+        "last_response": response,
+        "current_step": "notify"
+    }
 
-def notify_customer_node(state: RestaurantState) -> RestaurantState:
+
+
+def notify_customer_node(state: dict) -> dict:
     """
     Execute the notify_customer tool and update state.
-    
-    Args:
-        state: The current state
-        
-    Returns:
-        Updated state with notification result
+    This node is compatible with LangGraph's dictionary-based state.
     """
-    prep_time = state.prep_time
+    # 1. ADAPT: Convert the incoming dictionary to an object.
+    state_obj = SimpleNamespace(**state)
+
+    # 2. WORK: Use clean, object-style dot notation for your logic.
+    prep_time = state_obj.prep_time
     result = notify_customer(prep_time)
     
-    # Update state with the action taken
-    state.actions_taken.append({"action": "notify_customer", "result": result})
-    state.messages.append(FunctionMessage(content=result, name="notify_customer"))
-    state.current_step = "reroute"
+    # Update the state object's attributes
+    state_obj.actions_taken.append({"action": "notify_customer", "result": result})
+    state_obj.messages.append(FunctionMessage(content=result, name="notify_customer"))
     
-    return state
+    # 3. RETURN: Return a dictionary containing ONLY the updated fields.
+    return {
+        "actions_taken": state_obj.actions_taken,
+        "messages": state_obj.messages,
+        "current_step": "reroute"
+    }
 
-def reroute_driver_node(state: RestaurantState) -> RestaurantState:
+def reroute_driver_node(state: dict) -> dict:
     """
-    Execute the reroute_driver tool and update state.
-    
-    Args:
-        state: The current state
-        
-    Returns:
-        Updated state with reroute result
+    Executes the reroute_driver tool conditionally and updates the state.
+    This node is compatible with LangGraph's dictionary-based state.
     """
-    prep_time = state.prep_time
-    result = reroute_driver(prep_time)
+    # 1. ADAPT: Convert the incoming dictionary to an object.
+    state_obj = SimpleNamespace(**state)
     
-    # Update state with the action taken
-    state.actions_taken.append({"action": "reroute_driver", "result": result})
-    state.messages.append(FunctionMessage(content=result, name="reroute_driver"))
-    state.current_step = "ask_about_alternatives"
+    # 2. WORK: Use clean, object-style dot notation for your logic.
+    prep_time = state_obj.prep_time
+    result = ""
     
-    return state
+    # Add contextual analysis for better decision making
+    if prep_time < 15:
+        # FIX: Added the 'f' prefix to the f-string
+        result = f"Driver advised to wait as prep time is only {prep_time} minutes."
+    else:
+        result = reroute_driver(prep_time)
+    
+    # Update the state object's attributes
+    state_obj.actions_taken.append({"action": "driver_management", "result": result})
+    state_obj.messages.append(FunctionMessage(content=result, name="driver_management"))
+    
+    # 3. RETURN: Return a dictionary containing ONLY the updated fields.
+    return {
+        "actions_taken": state_obj.actions_taken,
+        "messages": state_obj.messages,
+        "current_step": "ask_about_alternatives"
+    }
 
-def suggest_alternatives_node(state: RestaurantState) -> RestaurantState:
+def suggest_alternatives_node(state: dict) -> dict:
     """
-    Execute the suggest_alternatives tool and update state.
-    
-    Args:
-        state: The current state
-        
-    Returns:
-        Updated state with alternative suggestions
+    Conditionally executes the suggest_alternatives tool and updates state.
+    This node is compatible with LangGraph's dictionary-based state.
     """
-    # Only execute if human wanted alternatives
-    if state.human_decisions.get("want_alternatives", False):
-        prep_time = state.prep_time
+    # 1. ADAPT: Convert the incoming dictionary to an object.
+    state_obj = SimpleNamespace(**state)
+
+    # Prepare a dictionary to hold the updates
+    updates = {"current_step": "complete"}
+
+    # 2. WORK: Use clean, object-style dot notation for your logic.
+    # Safely check if the human decision was to get alternatives
+    if getattr(state_obj, 'human_decisions', {}).get("want_alternatives", False):
+        prep_time = state_obj.prep_time
         result = suggest_alternatives(prep_time)
         
-        # Update state with the action taken
-        state.actions_taken.append({"action": "suggest_alternatives", "result": result})
-        state.messages.append(FunctionMessage(content=result, name="suggest_alternatives"))
-    
-    state.current_step = "complete"
-    return state
+        # Update the state object's attributes
+        state_obj.actions_taken.append({"action": "suggest_alternatives", "result": result})
+        state_obj.messages.append(FunctionMessage(content=result, name="suggest_alternatives"))
+        
+        # Add the changes to our updates dictionary
+        updates["actions_taken"] = state_obj.actions_taken
+        updates["messages"] = state_obj.messages
+
+    # 3. RETURN: Return the dictionary containing ONLY the updated fields.
+    return updates
 
 def complete_process(state: RestaurantState) -> RestaurantState:
     """
@@ -307,6 +346,11 @@ def build_restaurant_overload_graph() -> StateGraph:
     workflow.add_node("get_human_decision", get_human_decision)
     workflow.add_node("suggest_alternatives", suggest_alternatives_node)
     workflow.add_node("complete_process", complete_process)
+    # Add your final node here as well
+    workflow.add_node("final", final_state)
+
+    # Set the entry point
+    workflow.set_entry_point("analyze_situation")
     
     # Add edges
     workflow.add_edge("analyze_situation", "notify_customer")
@@ -321,15 +365,13 @@ def build_restaurant_overload_graph() -> StateGraph:
         }
     )
     workflow.add_edge("suggest_alternatives", "complete_process")
-    workflow.add_edge("complete_process", END)
+
+    # --- THE FIX IS HERE ---
+    # Route the last main node to your finalizer node INSTEAD of END
+    workflow.add_edge("complete_process", "final")
     
-    # Set the entry point
-    workflow.set_entry_point("analyze_situation")
-    
-    # Add a final state processor
-    workflow.add_node("final", final_state)
-    workflow.add_edge(END, "final")
-    
+    # Now, route your finalizer node to the actual END
+    workflow.add_edge("final", END)
     return workflow
 
 # Main function for managing overloaded restaurants
