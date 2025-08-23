@@ -249,28 +249,24 @@ def suggest_alternatives_node(state: dict) -> dict:
     # 3. RETURN: Return the dictionary containing ONLY the updated fields.
     return updates
 
-def complete_process(state: RestaurantState) -> RestaurantState:
+def complete_process(state: dict) -> dict:
     """
-    Summarize the actions taken and complete the process.
-    
-    Args:
-        state: The current state
-        
-    Returns:
-        Updated state with summary and completion status
+    Summarizes the actions taken and completes the process.
+    This node is compatible with LangGraph's dictionary-based state.
     """
-    # Create a summary message
-    summary_prompt = f"""
-    Summarize the actions taken to handle the overloaded restaurant situation:
-    - Delay: {state.prep_time} minutes
-    - Cuisine: {state.cuisine}
-    - Actions: {state.actions_taken}
+    # 1. ADAPT: Convert dict to object
+    state_obj = SimpleNamespace(**state)
+
+    # 2. WORK: Use object notation for your logic
+    summary_prompt = (
+        "Summarize the actions taken to handle the overloaded restaurant situation:\n"
+        f"- Delay: {state_obj.prep_time} minutes\n"
+        f"- Cuisine: {state_obj.cuisine}\n"
+        f"- Actions: {state_obj.actions_taken}\n\n"
+        "What was the final outcome of this situation?"
+    )
     
-    What was the outcome of this situation?
-    """
-    
-    # Generate summary using LLM
-    state.messages.append(HumanMessage(content=summary_prompt))
+    state_obj.messages.append(HumanMessage(content=summary_prompt))
     
     prompt = ChatPromptTemplate.from_messages([
         SystemMessage(content="You are a Grab Food order management agent summarizing your actions."),
@@ -278,14 +274,16 @@ def complete_process(state: RestaurantState) -> RestaurantState:
     ])
     
     chain = prompt | llm | StrOutputParser()
-    response = chain.invoke({"messages": state.messages})
+    response = chain.invoke({"messages": state_obj.messages})
     
-    # Add the summary to the state
-    state.messages.append(AIMessage(content=response))
-    state.last_response = response
-    state.status = "addressed"
-    
-    return state
+    state_obj.messages.append(AIMessage(content=response))
+
+    # 3. RETURN: Return a dictionary of only the updated fields
+    return {
+        "messages": state_obj.messages,
+        "last_response": response,
+        "status": "addressed"
+    }
 
 # Router function to determine next node
 def router(state: RestaurantState) -> Union[str, Literal["END"]]:
@@ -353,7 +351,7 @@ def build_restaurant_overload_graph() -> StateGraph:
     workflow.set_entry_point("analyze_situation")
     
     # Add edges
-    workflow.add_edge("analyze_situation", "notify_customer")
+    workflow.add_edge("analyze_situation", "notify_customer  ")
     workflow.add_edge("notify_customer", "reroute_driver")
     workflow.add_edge("reroute_driver", "get_human_decision")
     workflow.add_conditional_edges(
