@@ -116,36 +116,69 @@ def analyze_situation(state: dict) -> dict:
     state_obj = SimpleNamespace(**state)
 
     # 2. WORK: Use clean, object-style dot notation for all your logic.
-    # Enrich the context for a smarter AI response.
+    # Check if we've already taken any actions
+    actions_taken = getattr(state_obj, 'actions_taken', [])
+    
+    # Create context based on current state and previous actions
     context = {
         "prep_time": state_obj.prep_time,
         "cuisine": state_obj.cuisine,
         "time_of_day": getattr(state_obj, 'time_of_day', '19:00'), # Safely get, or use default
-        "customer_loyalty": getattr(state_obj, 'customer_loyalty', 'Gold')
+        "customer_loyalty": getattr(state_obj, 'customer_loyalty', 'Gold'),
+        "previous_actions": actions_taken
     }
-    situation_message = (
-        "Analyze the following restaurant overload situation:\n"
-        f"- Preparation Time: {context['prep_time']} minutes\n"
-        f"- Cuisine Type: {context['cuisine']}\n"
-        f"- Time of Day: {context['time_of_day']}\n"
-        f"- Customer Loyalty Status: {context['customer_loyalty']}"
-    )
+
+    # Prepare a detailed situation message that includes previous actions
+    situation_parts = [
+        "Analyze the following restaurant overload situation:\n",
+        f"- Preparation Time: {context['prep_time']} minutes\n",
+        f"- Cuisine Type: {context['cuisine']}\n",
+        f"- Time of Day: {context['time_of_day']}\n",
+        f"- Customer Loyalty Status: {context['customer_loyalty']}\n"
+    ]
+    
+    # Add information about previous actions if any exist
+    if actions_taken:
+        situation_parts.append("\nActions already taken:\n")
+        for i, action in enumerate(actions_taken, 1):
+            situation_parts.append(f"{i}. {action['action']}: {action['result']}\n")
+        situation_parts.append("\nWhat should be the next step based on the current situation and actions already taken?")
+    else:
+        situation_parts.append("\nWhat actions should be taken to address this situation?")
+    
+    situation_message = "".join(situation_parts)
     
     # Append the detailed message to the history
     state_obj.messages.append(HumanMessage(content=situation_message))
     
-    # System message explaining the agent's role
-    system_message = """
-    You are a Grab Food order management agent handling an overloaded restaurant situation.
+    # Create a system message that accounts for the circular workflow
+    system_prompt_parts = [
+        "You are a Grab Food order management agent handling an overloaded restaurant situation.\n\n",
+        "Analyze the current situation by considering:\n",
+        "1. Severity of delay (< 20 min = low, 20-40 min = medium, > 40 min = high)\n",
+        "2. Type of cuisine and typical expectations for preparation time\n",
+        "3. Time of day and potential rush hour impacts\n",
+        "4. Customer order history and loyalty status\n\n"
+    ]
     
-    Analyze the current situation by considering:
-    1. Severity of delay (< 20 min = low, 20-40 min = medium, > 40 min = high)
-    2. Type of cuisine and typical expectations for preparation time
-    3. Time of day and potential rush hour impacts
-    4. Customer order history and loyalty status
+    # Add adaptive guidance based on where we are in the workflow
+    if not actions_taken:
+        # Initial analysis
+        system_prompt_parts.append(
+            "This is your initial analysis. Create a comprehensive plan with specific steps to address the situation."
+        )
+    else:
+        # Re-analysis after some actions
+        system_prompt_parts.append(
+            "This is a re-analysis after taking some actions. Evaluate how the situation has changed and what should be done next.\n\n"
+            "Consider:\n"
+            "- Have we addressed the customer's needs adequately?\n"
+            "- Have we optimized the driver's time effectively?\n"
+            "- Should we offer alternatives to the customer?\n"
+            "- Is the situation resolved or do we need additional steps?"
+        )
     
-    Based on your analysis, create a detailed plan with specific justifications for each action.
-    """
+    system_message = "".join(system_prompt_parts)
     
     # Generate analysis using LLM
     prompt = ChatPromptTemplate.from_messages([
@@ -159,11 +192,24 @@ def analyze_situation(state: dict) -> dict:
     # Add the AI's analysis to the message history
     state_obj.messages.append(AIMessage(content=response))
     
+    # Determine the next step based on actions already taken
+    next_step = "notify"  # Default initial step
+    
+    notify_done = any(action['action'] == 'notify_customer' for action in actions_taken)
+    reroute_done = any(action['action'] == 'driver_management' for action in actions_taken)
+    
+    if notify_done and reroute_done:
+        # If we've already notified and rerouted, move to human decision
+        next_step = "ask_about_alternatives"
+    elif notify_done:
+        # If we've notified but not rerouted, do that next
+        next_step = "reroute"
+    
     # 3. RETURN: Return a dictionary containing only the fields that have changed.
     return {
         "messages": state_obj.messages,
         "last_response": response,
-        "current_step": "notify"
+        "current_step": next_step
     }
 
 
@@ -296,20 +342,13 @@ def router(state: RestaurantState) -> Union[str, Literal["END"]]:
     Returns:
         Next node to execute or END
     """
-    if state.current_step == "analyze":
-        return "analyze_situation"
-    elif state.current_step == "notify":
-        return "notify_customer"
-    elif state.current_step == "reroute":
-        return "reroute_driver"
-    elif state.current_step == "ask_about_alternatives":
-        return "get_human_decision"
-    elif state.current_step == "suggest_alternatives":
+    # Check if the customer wants alternatives based on the human decision
+    # If want_alternatives is True, route to suggest_alternatives
+    # Otherwise, route to complete_process
+    if state.human_decisions.get("want_alternatives", False):
         return "suggest_alternatives"
-    elif state.current_step == "complete":
-        return "complete_process"
     else:
-        return "END"
+        return "complete_process"
 
 # Define final_state to be called when the graph completes
 def final_state(state: RestaurantState) -> RestaurantState:
@@ -351,9 +390,14 @@ def build_restaurant_overload_graph() -> StateGraph:
     workflow.set_entry_point("analyze_situation")
     
     # Add edges
-    workflow.add_edge("analyze_situation", "notify_customer  ")
-    workflow.add_edge("notify_customer", "reroute_driver")
-    workflow.add_edge("reroute_driver", "get_human_decision")
+    workflow.add_edge("analyze_situation", "notify_customer")
+    workflow.add_edge("analyze_situation", "reroute_driver")
+    workflow.add_edge("analyze_situation", "get_human_decision")
+    
+    # Add return edges back to analyze_situation for continuous re-analysis
+    workflow.add_edge("notify_customer", "analyze_situation")
+    workflow.add_edge("reroute_driver", "analyze_situation")
+    
     workflow.add_conditional_edges(
         "get_human_decision",
         router,
@@ -362,7 +406,8 @@ def build_restaurant_overload_graph() -> StateGraph:
             "complete_process": "complete_process",
         }
     )
-    workflow.add_edge("suggest_alternatives", "complete_process")
+    workflow.add_edge("suggest_alternatives", "analyze_situation")
+    workflow.add_edge("analyze_situation","complete_process")
 
     # --- THE FIX IS HERE ---
     # Route the last main node to your finalizer node INSTEAD of END

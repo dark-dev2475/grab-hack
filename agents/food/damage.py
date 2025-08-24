@@ -13,6 +13,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.tools import tool
 from langchain_experimental.utilities import PythonREPL
 from typing_extensions import TypedDict
+from types import SimpleNamespace
 
 from langchain_core.messages import HumanMessage, AIMessage, FunctionMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -31,17 +32,22 @@ llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest")
 class DisputeState(MessagesState):
     """State class for packaging dispute resolution."""
     evidence: Optional[Dict[str, Any]] = None
-    customer_response: Optional[str] = None
-    driver_response: Optional[str] = None
+    customer_evidence: Optional[Dict[str, Any]] = None
+    driver_evidence: Optional[Dict[str, Any]] = None
     analysis_result: Optional[Dict[str, Any]] = None
     resolution: Optional[str] = None
     dispute_stage: str = "initiate"  # Tracks the current stage of the dispute
+    actions_taken: List[Dict[str, Any]] = []
+    dispute_details: Optional[str] = None
+    next: str = "grab_food"
+    status: str = "in_progress"
 
 # Tool definitions
 @tool
 def initiate_mediation_flow(dispute_details: str) -> Dict[str, Any]:
     """
-    Initiates a mediation flow by pausing the order and opening communication channels.
+    Initiates a real-time mediation flow by pausing the order completion and opening 
+    synchronized communication channels between the customer and driver.
     
     Args:
         dispute_details: Description of the packaging dispute
@@ -51,7 +57,7 @@ def initiate_mediation_flow(dispute_details: str) -> Dict[str, Any]:
     """
     return {
         "status": "mediation_initiated",
-        "message": "Order paused. Communication portal opened between customer and driver.",
+        "message": "Order paused. Real-time communication portal opened between customer and driver.",
         "dispute_details": dispute_details
     }
 
@@ -59,44 +65,67 @@ def initiate_mediation_flow(dispute_details: str) -> Dict[str, Any]:
 def collect_evidence_from_customer(question: str) -> Dict[str, Any]:
     """
     Collects evidence from the customer regarding the damaged packaging.
+    Prompts the customer to take photos of the damage and answer specific questions.
     
     Args:
-        question: Specific question to ask the customer
+        question: Specific question to ask the customer about the packaging
         
     Returns:
         Customer's response with evidence
     """
     # In a real implementation, this would integrate with a chat UI
     # For now, we'll simulate a response
-    return {
-        "response": "The packaging was completely torn when I received it. The food was spilling out of the container.",
-        "photos_provided": True,
-        "timestamp": "2025-08-21T15:30:45Z"
+    responses = {
+        "Was the packaging seal intact when you received it?": 
+            {"response": "No, the seal was broken and food was leaking out", "photos_provided": True},
+        "Did you notice any damage before the driver handed you the order?": 
+            {"response": "Yes, I saw liquid leaking from the bag when the driver was approaching", "photos_provided": True},
+        "Can you describe the condition of the packaging?": 
+            {"response": "The container was torn on one side and the food was spilling out", "photos_provided": True},
+        "default": 
+            {"response": "The packaging was completely torn when I received it. The food was spilling out of the container.", "photos_provided": True}
     }
+    
+    result = responses.get(question, responses["default"])
+    result["timestamp"] = "2025-08-21T15:30:45Z"
+    
+    return result
 
 @tool
 def collect_evidence_from_driver(question: str) -> Dict[str, Any]:
     """
     Collects evidence from the driver regarding the damaged packaging.
+    Prompts the driver to take photos and answer specific questions about the order handling.
     
     Args:
-        question: Specific question to ask the driver
+        question: Specific question to ask the driver about the order handling
         
     Returns:
         Driver's response with evidence
     """
     # In a real implementation, this would integrate with a chat UI
     # For now, we'll simulate a response
-    return {
-        "response": "The packaging was intact when I picked it up. I was careful during transport.",
-        "photos_provided": True, 
-        "timestamp": "2025-08-21T15:35:12Z"
+    responses = {
+        "Was the packaging properly sealed when you picked it up from the restaurant?": 
+            {"response": "Yes, it was sealed properly with the merchant's sticker", "photos_provided": True},
+        "How did you transport the order?": 
+            {"response": "In the insulated delivery bag, placed flat on the bottom", "photos_provided": True},
+        "Did you notice any damage before reaching the customer?": 
+            {"response": "No, the order seemed fine when I took it out of my bag", "photos_provided": True},
+        "default": 
+            {"response": "The packaging was intact when I picked it up. I was careful during transport.", "photos_provided": True}
     }
+    
+    result = responses.get(question, responses["default"])
+    result["timestamp"] = "2025-08-21T15:35:12Z"
+    
+    return result
 
 @tool
 def issue_instant_refund(amount: float, reason: str) -> Dict[str, Any]:
     """
-    Issues an instant refund to the customer.
+    Issues an instant refund to the customer for the damaged order.
+    Immediately compensates the customer without requiring further review.
     
     Args:
         amount: Refund amount
@@ -117,6 +146,7 @@ def issue_instant_refund(amount: float, reason: str) -> Dict[str, Any]:
 def exonerate_driver(reason: str) -> Dict[str, Any]:
     """
     Exonerates the driver from blame in the dispute.
+    Ensures the driver's rating is not affected by the packaging issue.
     
     Args:
         reason: Reason for exonerating the driver
@@ -127,469 +157,520 @@ def exonerate_driver(reason: str) -> Dict[str, Any]:
     return {
         "action": "driver_exonerated",
         "reason": reason,
-        "status": "completed"
+        "status": "completed",
+        "driver_protected": True
     }
 
 @tool
-def log_merchant_packaging_issue(details: str, severity: str) -> Dict[str, Any]:
+def log_merchant_packaging_feedback(details: str, severity: str) -> Dict[str, Any]:
     """
-    Logs an issue with the merchant's packaging for quality control.
+    Logs detailed feedback about the merchant's packaging for quality improvement.
+    Sends an evidence-backed report to the merchant to help them improve their packaging.
     
     Args:
-        details: Details of the packaging issue
+        details: Specific details of the packaging issue
         severity: Severity level (low, medium, high)
         
     Returns:
-        Confirmation of the logged issue
+        Confirmation of the logged feedback
     """
     return {
         "action": "merchant_packaging_logged",
         "details": details,
         "severity": severity,
         "case_id": "pkg-20250821-78901",
-        "status": "under_review"
+        "status": "under_review",
+        "merchant_notified": True
     }
 
 @tool
-def analyze_collected_evidence(customer_evidence: Dict[str, Any], driver_evidence: Dict[str, Any]) -> Dict[str, Any]:
-    """Advanced evidence analysis with multiple factors"""
-    # Extract evidence details
-    customer_photos = customer_evidence.get("photos_provided", False)
-    driver_photos = driver_evidence.get("photos_provided", False)
-    customer_statement = customer_evidence.get("response", "")
-    driver_statement = driver_evidence.get("response", "")
+def notify_resolution(customer_message: str, driver_message: str) -> Dict[str, Any]:
+    """
+    Notifies both the customer and driver about the resolution outcome.
+    Provides clear communication about the resolution and next steps.
     
-    # Analyze timing (how soon after delivery the complaint was made)
-    customer_timestamp = customer_evidence.get("timestamp", "")
-    delivery_timestamp = "2025-08-21T15:20:00Z"  # In a real implementation, get from order data
-    
-    # Calculate factors (simplified for this example)
-    photo_factor = 0.6 if customer_photos else 0.2
-    timing_factor = 0.7  # Higher if complaint was immediate
-    statement_consistency = 0.8  # Would analyze text for consistency
-    
-    # Calculate weighted responsibility
-    merchant_score = (photo_factor + timing_factor + statement_consistency) / 3
-    
-    # Determine responsibility with confidence
-    if merchant_score > 0.7:
-        responsibility = "merchant"
-        confidence = merchant_score
-    elif merchant_score < 0.4:
-        responsibility = "customer"
-        confidence = 1 - merchant_score
-    else:
-        responsibility = "unclear"
-        confidence = 0.5
-    
+    Args:
+        customer_message: Message to send to the customer
+        driver_message: Message to send to the driver
+        
+    Returns:
+        Confirmation that both parties have been notified
+    """
     return {
-        "responsibility": responsibility,
-        "confidence": confidence,
-        "reasoning": "Multi-factor analysis including photo evidence, timing, and statement consistency",
-        "timestamp": "2025-08-21T15:45:00Z",
-        "factors_considered": {
-            "photo_evidence": photo_factor,
-            "timing": timing_factor,
-            "statement_consistency": statement_consistency
-        }
+        "action": "parties_notified",
+        "customer_message": customer_message,
+        "driver_message": driver_message,
+        "timestamp": "2025-08-21T15:50:30Z",
+        "status": "completed"
     }
 
-# Define the node functions for the graph
-def gather_initial_info(state: DisputeState) -> DisputeState:
-    """Node to gather initial information about the dispute."""
-    # Create a system message explaining the situation
-    state.messages.append(
-        SystemMessage(content="""
-        You are a Grab Food dispute resolution agent handling a damaged packaging case.
-        
-        Your task is to:
-        1. Understand the details of the dispute
-        2. Decide what information to collect from the customer
-        
-        Use the initiate_mediation_flow tool to begin the process.
-        """)
-    )
+# Node functions for the LangGraph
+def initiate_mediation_node(state: dict) -> dict:
+    """
+    Initiates the mediation process between customer and driver.
+    """
+    # Convert incoming dictionary to object for easier handling
+    state_obj = SimpleNamespace(**state)
     
-    # Create a human message to simulate the customer's initial complaint
-    state.messages.append(
-        HumanMessage(content="The packaging for my order was damaged, and the food spilled all over the bag. I want a refund.")
-    )
+    # Get dispute details from the state or use a default message
+    dispute_details = getattr(state_obj, 'dispute_details', 
+                             "Dispute regarding damaged packaging during delivery")
     
-    # Call the ToolNode with the updated state
-    return state
+    # Call the tool to initiate mediation
+    result = initiate_mediation_flow(dispute_details)
+    
+    # Update state with the result
+    if not hasattr(state_obj, 'actions_taken'):
+        state_obj.actions_taken = []
+    
+    state_obj.actions_taken.append({"action": "initiate_mediation", "result": result})
+    state_obj.messages.append(FunctionMessage(content=str(result), name="initiate_mediation_flow"))
+    state_obj.dispute_stage = "collect_evidence"
+    
+    # Return only the updated fields
+    return {
+        "actions_taken": state_obj.actions_taken,
+        "messages": state_obj.messages,
+        "dispute_stage": state_obj.dispute_stage
+    }
 
-def collect_customer_evidence(state: DisputeState) -> DisputeState:
-    """Node to collect evidence from the customer."""
-    # Add a system message to guide the agent
-    state.messages.append(
-        SystemMessage(content="""
-        Now you need to collect evidence from the customer about the damaged packaging.
+def collect_evidence_node(state: dict) -> dict:
+    """
+    Collects evidence from both the customer and driver regarding the dispute.
+    Uses the LLM to generate appropriate questions based on the dispute context.
+    """
+    # Convert incoming dictionary to object for easier handling
+    state_obj = SimpleNamespace(**state)
+    
+    # Create a system message to guide the LLM
+    system_message = """
+    You are a Grab Food dispute resolution agent handling a packaging damage situation.
+    Your task is to generate appropriate questions to ask both the customer and driver 
+    to collect evidence about what happened.
+    
+    Generate questions that:
+    1. Are specific and relevant to packaging damage
+    2. Help determine responsibility (merchant, driver, or customer)
+    3. Request factual information rather than opinions
+    
+    Provide exactly one question for the customer and one for the driver.
+    """
+    
+    # Prepare prompt with context from the dispute
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessage(content=system_message),
+        MessagesPlaceholder(variable_name="messages"),
+        HumanMessage(content="Generate one specific question each for the customer and driver to collect evidence about the damaged packaging. Format as JSON with 'customer_question' and 'driver_question' keys.")
+    ])
+    
+    # Get questions from LLM
+    chain = prompt | llm
+    response = chain.invoke({"messages": state_obj.messages})
+    
+    try:
+        # Try to extract the questions from the response
+        # This is a simplified approach - in a real implementation, use a proper output parser
+        response_content = response.content
+        import json
+        import re
         
-        Ask specific questions to understand:
-        1. What specific damage was observed
-        2. When the damage was noticed
-        3. If the customer has photos of the damaged packaging
+        # Try to extract JSON if wrapped in markdown code blocks
+        json_match = re.search(r'```json\s*(.*?)\s*```', response_content, re.DOTALL)
+        if json_match:
+            response_content = json_match.group(1)
         
-        Use the collect_evidence_from_customer tool.
-        """)
-    )
+        # Try to parse as JSON
+        questions = json.loads(response_content)
+        customer_question = questions.get("customer_question", "Can you describe the condition of the packaging when you received it?")
+        driver_question = questions.get("driver_question", "Was the packaging properly sealed when you picked it up from the restaurant?")
+    except Exception as e:
+        # Fallback to default questions if parsing fails
+        customer_question = "Can you describe the condition of the packaging when you received it?"
+        driver_question = "Was the packaging properly sealed when you picked it up from the restaurant?"
     
-    # Call the tool to collect evidence
-    evidence = collect_evidence_from_customer("Please describe the damage to your packaging and provide any photos if available.")
+    # Collect evidence from both parties
+    customer_evidence = collect_evidence_from_customer(customer_question)
+    driver_evidence = collect_evidence_from_driver(driver_question)
     
-    # Store the evidence in the state
-    state.evidence = evidence
-    state.customer_response = evidence["response"]
+    # Update state with collected evidence
+    state_obj.customer_evidence = customer_evidence
+    state_obj.driver_evidence = driver_evidence
+    state_obj.dispute_stage = "analyze_evidence"
     
-    # Add a function message with the evidence
-    state.messages.append(
-        FunctionMessage(content=str(evidence), name="collect_evidence_from_customer")
-    )
+    # Add evidence collection to messages
+    state_obj.messages.append(FunctionMessage(
+        content=f"Customer question: {customer_question}\nCustomer response: {customer_evidence['response']}",
+        name="collect_evidence_from_customer"
+    ))
+    state_obj.messages.append(FunctionMessage(
+        content=f"Driver question: {driver_question}\nDriver response: {driver_evidence['response']}",
+        name="collect_evidence_from_driver"
+    ))
     
-    return state
-
-def collect_driver_evidence(state: DisputeState) -> DisputeState:
-    """Node to collect evidence from the driver."""
-    # Add a system message to guide the agent
-    state.messages.append(
-        SystemMessage(content="""
-        Now you need to collect evidence from the driver about the packaging.
-        
-        Ask specific questions to understand:
-        1. The condition of the packaging when picked up
-        2. How the food was transported
-        3. If the driver has photos from pickup
-        
-        Use the collect_evidence_from_driver tool.
-        """)
-    )
-    
-    # Call the tool to collect evidence
-    evidence = collect_evidence_from_driver("Please describe the condition of the packaging when you picked up the order and how you transported it.")
-    
-    # Store the evidence in the state
-    if state.evidence:
-        state.evidence.update({"driver_evidence": evidence})
-    else:
-        state.evidence = {"driver_evidence": evidence}
-    
-    state.driver_response = evidence["response"]
-    
-    # Add a function message with the evidence
-    state.messages.append(
-        FunctionMessage(content=str(evidence), name="collect_evidence_from_driver")
-    )
-    
-    return state
-
-def analyze_dispute_evidence(state: DisputeState) -> DisputeState:
-    """Node to analyze the collected evidence and determine responsibility."""
-    if not state.evidence or not state.customer_response or not state.driver_response:
-        # If evidence is missing, we can't analyze properly
-        state.messages.append(
-            SystemMessage(content="Insufficient evidence collected. Please gather more information.")
-        )
-        return state
-    
-    # Get the customer and driver evidence
-    customer_evidence = state.evidence
-    driver_evidence = state.evidence.get("driver_evidence", {})
-    
-    # Analyze the evidence
-    analysis_result = analyze_collected_evidence(customer_evidence, driver_evidence)
-    
-    # Store the analysis result in the state
-    state.analysis_result = analysis_result
-    
-    # Add a message with the analysis results
-    state.messages.append(
-        FunctionMessage(content=str(analysis_result), name="analyze_collected_evidence")
-    )
-    
-    # Add a system message for next steps
-    state.messages.append(
-        SystemMessage(content=f"""
-        Analysis complete. The evidence suggests that the {analysis_result['responsibility']} 
-        is likely responsible for the damaged packaging with a confidence of {analysis_result['confidence']}.
-        
-        Based on this analysis, determine the appropriate resolution action.
-        """)
-    )
-    
-    return state
-
-def resolve_dispute(state: DisputeState) -> DisputeState:
-    """Enhanced resolution logic with customer value consideration"""
-    if not state.analysis_result:
-        return state
-        
-    responsibility = state.analysis_result.get("responsibility", "unknown")
-    confidence = state.analysis_result.get("confidence", 0.5)
-    
-    # Check customer value (simplified - would use actual data)
-    customer_value = "high"  # Would be determined from order history
-    
-    # Refund logic with customer value consideration
-    if responsibility == "merchant" or (responsibility == "unclear" and customer_value == "high"):
-        # Full refund for clear merchant fault or high-value customers with unclear fault
-        refund_amount = 15.00
-        reason = "Full refund issued due to packaging issues"
-    elif responsibility == "unclear":
-        # Partial refund for unclear responsibility with regular customers
-        refund_amount = 7.50
-        reason = "Partial refund issued as goodwill gesture"
-    else:
-        # No refund for clear customer fault
-        refund_amount = 0
-        reason = "No refund issued as analysis indicates damage occurred after delivery"
-        
-    # Rest of the function remains similar but uses these new variables
-    if responsibility == "merchant":
-        # Issue a refund to the customer
-        refund_result = issue_instant_refund(
-            amount=refund_amount,
-            reason=reason
-        )
-        
-        # Exonerate the driver
-        driver_result = exonerate_driver(
-            reason="Driver not responsible for pre-packaging issues"
-        )
-        
-        # Log the merchant packaging issue
-        merchant_result = log_merchant_packaging_issue(
-            details="Food packaging damaged causing spillage",
-            severity="high"
-        )
-        
-        # Update the state with the resolution
-        state.resolution = "customer_refunded_merchant_logged"
-        
-        # Add messages with the resolution actions
-        state.messages.append(
-            FunctionMessage(content=str(refund_result), name="issue_instant_refund")
-        )
-        state.messages.append(
-            FunctionMessage(content=str(driver_result), name="exonerate_driver")
-        )
-        state.messages.append(
-            FunctionMessage(content=str(merchant_result), name="log_merchant_packaging_issue")
-        )
-        
-    elif responsibility == "customer":
-        # If the customer is responsible, no refund is issued
-        state.resolution = "no_refund_issued"
-        
-        # Add a message explaining the decision
-        state.messages.append(
-            AIMessage(content="""
-            Based on the evidence provided, we cannot issue a refund as the analysis indicates 
-            the damage likely occurred after delivery. The driver has been exonerated.
-            """)
-        )
-        
-        # Exonerate the driver
-        driver_result = exonerate_driver(
-            reason="Driver not responsible based on evidence analysis"
-        )
-        
-        state.messages.append(
-            FunctionMessage(content=str(driver_result), name="exonerate_driver")
-        )
-        
-    else:
-        # If responsibility is unclear, partial refund may be issued
-        refund_result = issue_instant_refund(
-            amount=refund_amount,
-            reason=reason
-        )
-        
-        state.resolution = "partial_refund_issued"
-        
-        state.messages.append(
-            FunctionMessage(content=str(refund_result), name="issue_instant_refund")
-        )
-    
-    # Add a final summary message
-    state.messages.append(
-        AIMessage(content=f"""
-        Dispute resolution complete.
-        
-        Resolution: {state.resolution}
-        
-        Thank you for your patience during this process. If you have any further concerns,
-        please contact Grab customer support.
-        """)
-    )
-    
-    return state
-
-def should_collect_more_evidence(state: DisputeState) -> Union[Literal["collect_driver"], Literal["analyze"]]:
-    """Conditional edge to determine if more evidence is needed."""
-    # If we have customer evidence but not driver evidence, collect from driver
-    if state.customer_response and not state.driver_response:
-        return "collect_driver"
-    
-    # Otherwise, proceed to analysis
-    return "analyze"
-
-def determine_next_step(state: DisputeState) -> Union[Literal["resolve"], Literal["human_review"], Literal["collect_more"]]:
-    """Conditional edge to determine the next step after analysis."""
-    if not state.analysis_result:
-        return "collect_more"
-    
-    confidence = state.analysis_result.get("confidence", 0)
-    
-    # If confidence is high enough, proceed to resolution
-    if confidence >= 0.6:
-        return "resolve"
-    
-    # Otherwise, require human review
-    return "human_review"
-
-def human_review_node(state: DisputeState) -> DisputeState:
-    """Node for human review of complex cases."""
-    state.messages.append(
-        SystemMessage(content="""
-        This case requires human review due to complexity or low confidence in automated analysis.
-        
-        A Grab support specialist will review the evidence and make a final determination.
-        """)
-    )
-    
-    # In a real implementation, this would integrate with a human review system
-    # For now, we'll simulate a human decision
-    state.messages.append(
-        HumanMessage(content="After reviewing the evidence, I've determined the merchant is responsible. Please issue a full refund.")
-    )
-    
-    # Update the analysis result with the human decision
-    if state.analysis_result:
-        state.analysis_result["responsibility"] = "merchant"
-        state.analysis_result["confidence"] = 1.0  # Human decision has full confidence
-        state.analysis_result["human_reviewed"] = True
-    else:
-        state.analysis_result = {
-            "responsibility": "merchant",
-            "confidence": 1.0,
-            "human_reviewed": True
+    # Add to actions taken
+    state_obj.actions_taken.append({
+        "action": "collect_evidence", 
+        "result": {
+            "customer_evidence": customer_evidence,
+            "driver_evidence": driver_evidence
         }
+    })
     
-    return state
+    # Return only the updated fields
+    return {
+        "customer_evidence": state_obj.customer_evidence,
+        "driver_evidence": state_obj.driver_evidence,
+        "messages": state_obj.messages,
+        "actions_taken": state_obj.actions_taken,
+        "dispute_stage": state_obj.dispute_stage
+    }
 
-# The ToolNode for all tools
-tools_node = ToolNode(tools=[
-    initiate_mediation_flow,
-    collect_evidence_from_customer,
-    collect_evidence_from_driver,
-    analyze_collected_evidence,
-    issue_instant_refund,
-    exonerate_driver,
-    log_merchant_packaging_issue
-])
-
-def manage_packaging_dispute(dispute_details: str = "Customer reports damaged packaging with food spillage") -> StateGraph:
+def analyze_evidence_node(state: dict) -> dict:
     """
-    Creates and returns a LangGraph workflow for managing packaging disputes.
+    Analyzes the collected evidence using the LLM to determine responsibility.
+    Makes an intelligent decision based on the evidence provided by both parties.
+    """
+    # Convert incoming dictionary to object for easier handling
+    state_obj = SimpleNamespace(**state)
     
-    Args:
-        dispute_details: Description of the packaging dispute
+    # Create a system message to guide the LLM
+    system_message = """
+    You are a Grab Food dispute resolution agent analyzing evidence in a packaging damage case.
+    
+    Your task is to:
+    1. Review the evidence provided by both the customer and driver
+    2. Analyze the statements and timing of reports
+    3. Consider the presence of photographic evidence
+    4. Determine the most likely responsible party (merchant, driver, or customer)
+    5. Assign a confidence level to your determination
+    
+    Be objective and fair in your analysis. Consider all evidence carefully.
+    """
+    
+    # Prepare prompt with evidence from both parties
+    customer_evidence = state_obj.customer_evidence or {}
+    driver_evidence = state_obj.driver_evidence or {}
+    
+    evidence_summary = f"""
+    Customer Evidence:
+    - Statement: {customer_evidence.get('response', 'No response')}
+    - Photos Provided: {customer_evidence.get('photos_provided', False)}
+    - Timestamp: {customer_evidence.get('timestamp', 'Unknown')}
+    
+    Driver Evidence:
+    - Statement: {driver_evidence.get('response', 'No response')}
+    - Photos Provided: {driver_evidence.get('photos_provided', False)}
+    - Timestamp: {driver_evidence.get('timestamp', 'Unknown')}
+    """
+    
+    state_obj.messages.append(HumanMessage(content=f"Analyze the following evidence and determine responsibility:\n{evidence_summary}"))
+    
+    # Generate the analysis
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessage(content=system_message),
+        MessagesPlaceholder(variable_name="messages")
+    ])
+    
+    chain = prompt | llm | StrOutputParser()
+    analysis_text = chain.invoke({"messages": state_obj.messages})
+    
+    # Parse responsibility from analysis
+    responsibility = "merchant"  # Default to merchant responsibility
+    confidence = 0.8  # Default confidence
+    
+    if "driver" in analysis_text.lower() and "fault" in analysis_text.lower():
+        responsibility = "driver"
+    elif "customer" in analysis_text.lower() and "fault" in analysis_text.lower():
+        responsibility = "customer"
+    
+    # More sophisticated parsing could be implemented here
+    
+    # Create analysis result
+    analysis_result = {
+        "responsibility": responsibility,
+        "confidence": confidence,
+        "reasoning": analysis_text,
+        "timestamp": "2025-08-21T15:45:00Z",
+        "evidence_considered": {
+            "customer_evidence": customer_evidence,
+            "driver_evidence": driver_evidence
+        }
+    }
+    
+    # Update state with analysis
+    state_obj.analysis_result = analysis_result
+    state_obj.dispute_stage = "resolve"
+    state_obj.messages.append(AIMessage(content=analysis_text))
+    
+    # Add to actions taken
+    state_obj.actions_taken.append({
+        "action": "analyze_evidence",
+        "result": {
+            "responsibility": responsibility,
+            "confidence": confidence
+        }
+    })
+    
+    # Return only the updated fields
+    return {
+        "analysis_result": state_obj.analysis_result,
+        "messages": state_obj.messages,
+        "actions_taken": state_obj.actions_taken,
+        "dispute_stage": state_obj.dispute_stage
+    }
+
+def resolve_dispute_node(state: dict) -> dict:
+    """
+    Resolves the dispute based on the evidence analysis.
+    Takes appropriate actions (refund, exoneration, merchant feedback) based on the determined responsibility.
+    """
+    # Convert incoming dictionary to object for easier handling
+    state_obj = SimpleNamespace(**state)
+    
+    # Get the analysis result
+    analysis_result = state_obj.analysis_result or {}
+    responsibility = analysis_result.get("responsibility", "unclear")
+    
+    # Create resolution actions based on responsibility
+    if responsibility == "merchant":
+        # Issue refund, exonerate driver, log merchant issue
+        refund_result = issue_instant_refund(10.00, "Merchant packaging fault confirmed by evidence")
+        exonerate_result = exonerate_driver("Packaging issue was from merchant, not driver handling")
+        merchant_result = log_merchant_packaging_feedback(
+            "Food container was not properly sealed by merchant staff", "high"
+        )
         
-    Returns:
-        A compiled StateGraph workflow ready to be executed
+        resolution = "The evidence indicates this was a merchant packaging issue. Customer has been refunded and driver record protected."
+    
+    elif responsibility == "driver":
+        # Still issue refund, but don't exonerate driver
+        refund_result = issue_instant_refund(10.00, "Damage during delivery, customer compensated")
+        exonerate_result = {"action": "driver_not_exonerated", "reason": "Evidence indicates mishandling during transport"}
+        merchant_result = {"action": "no_merchant_action", "reason": "Packaging was appropriate"}
+        
+        resolution = "The evidence indicates damage occurred during delivery. Customer has been refunded."
+    
+    else:  # unclear or customer
+        # Partial refund as goodwill
+        refund_result = issue_instant_refund(5.00, "Goodwill refund despite unclear responsibility")
+        exonerate_result = exonerate_driver("Insufficient evidence to assign responsibility to driver")
+        merchant_result = log_merchant_packaging_feedback(
+            "Consider improving packaging robustness, though not clearly at fault in this case", "low"
+        )
+        
+        resolution = "The evidence is inconclusive. A partial refund has been issued as goodwill."
+    
+    # Notify both parties
+    customer_message = f"We've reviewed your damaged packaging report. {resolution}"
+    driver_message = f"The damaged packaging dispute has been resolved. {exonerate_result.get('reason', '')}"
+    
+    notification_result = notify_resolution(customer_message, driver_message)
+    
+    # Update state with resolution
+    state_obj.resolution = resolution
+    state_obj.dispute_stage = "completed"
+    state_obj.status = "resolved"
+    
+    # Add resolution actions to messages
+    state_obj.messages.append(FunctionMessage(content=str(refund_result), name="issue_instant_refund"))
+    state_obj.messages.append(FunctionMessage(content=str(exonerate_result), name="exonerate_driver"))
+    state_obj.messages.append(FunctionMessage(content=str(merchant_result), name="log_merchant_packaging_feedback"))
+    state_obj.messages.append(FunctionMessage(content=str(notification_result), name="notify_resolution"))
+    
+    # Add final summary
+    system_prompt = "You are a Grab Food dispute resolution agent. Summarize the dispute resolution process and outcome."
+    state_obj.messages.append(HumanMessage(content="Please provide a final summary of this dispute resolution."))
+    
+    prompt = ChatPromptTemplate.from_messages([
+        SystemMessage(content=system_prompt),
+        MessagesPlaceholder(variable_name="messages"),
+    ])
+    
+    chain = prompt | llm | StrOutputParser()
+    summary = chain.invoke({"messages": state_obj.messages})
+    
+    state_obj.messages.append(AIMessage(content=summary))
+    
+    # Add to actions taken
+    state_obj.actions_taken.append({
+        "action": "resolve_dispute",
+        "result": {
+            "resolution": resolution,
+            "refund_issued": refund_result.get("action") == "refund_issued",
+            "driver_exonerated": exonerate_result.get("action") == "driver_exonerated",
+            "merchant_feedback": merchant_result.get("action") == "merchant_packaging_logged"
+        }
+    })
+    
+    # Return only the updated fields
+    return {
+        "resolution": state_obj.resolution,
+        "messages": state_obj.messages,
+        "actions_taken": state_obj.actions_taken,
+        "dispute_stage": state_obj.dispute_stage,
+        "status": state_obj.status
+    }
+
+def final_state_node(state: dict) -> dict:
     """
-    # Create the workflow
+    Final processing before returning to parent agent.
+    """
+    # Convert incoming dictionary to object for easier handling
+    state_obj = SimpleNamespace(**state)
+    
+    # Ensure next is set to grab_food (parent agent)
+    state_obj.next = "grab_food"
+    
+    # Return only the updated fields
+    return {
+        "next": state_obj.next
+    }
+
+# Build the packaging dispute resolution graph
+def build_packaging_dispute_graph() -> StateGraph:
+    """
+    Build the LangGraph for packaging dispute resolution.
+    
+    Returns:
+        A StateGraph instance for the workflow
+    """
+    # Create the graph
     workflow = StateGraph(DisputeState)
     
-    # Add all the nodes
-    workflow.add_node("gather_info", gather_initial_info)
-    workflow.add_node("collect_customer", collect_customer_evidence)
-    workflow.add_node("collect_driver", collect_driver_evidence)
-    workflow.add_node("analyze", analyze_dispute_evidence)
-    workflow.add_node("resolve", resolve_dispute)
-    workflow.add_node("human_review", human_review_node)
-    workflow.add_node("tools", tools_node)
+    # Add nodes
+    workflow.add_node("initiate_mediation", initiate_mediation_node)
+    workflow.add_node("collect_evidence", collect_evidence_node)
+    workflow.add_node("analyze_evidence", analyze_evidence_node)
+    workflow.add_node("resolve_dispute", resolve_dispute_node)
+    workflow.add_node("final", final_state_node)
     
     # Set the entry point
-    workflow.set_entry_point("gather_info")
+    workflow.set_entry_point("initiate_mediation")
     
-    # Connect the nodes with edges
-    workflow.add_edge("gather_info", "tools")
-    workflow.add_edge("tools", "collect_customer")
+    # Add edges between nodes
+    workflow.add_edge("initiate_mediation", "collect_evidence")
+    workflow.add_edge("collect_evidence", "analyze_evidence")
+    workflow.add_edge("analyze_evidence", "resolve_dispute")
     
-    # Conditional edge from customer evidence collection
+    # Add conditional re-analysis edge (circular workflow for better intelligence)
+    # If the confidence is low, go back to collecting more evidence
+    def conditional_router(state: DisputeState) -> str:
+        """Route based on analysis confidence"""
+        analysis = state.analysis_result or {}
+        confidence = analysis.get("confidence", 0.0)
+        if confidence < 0.6 and state.dispute_stage != "completed":
+            return "collect_evidence"
+        else:
+            return "resolve_dispute"
+    
     workflow.add_conditional_edges(
-        "collect_customer",
-        should_collect_more_evidence,
+        "analyze_evidence",
+        conditional_router,
         {
-            "collect_driver": "collect_driver",
-            "analyze": "analyze"
+            "collect_evidence": "collect_evidence",
+            "resolve_dispute": "resolve_dispute"
         }
     )
     
-    workflow.add_edge("collect_driver", "analyze")
+    # Add final edge to the parent agent
+    workflow.add_edge("resolve_dispute", "final")
+    workflow.add_edge("final", END)
     
-    # Conditional edge from analysis
-    workflow.add_conditional_edges(
-        "analyze",
-        determine_next_step,
-        {
-            "resolve": "resolve",
-            "human_review": "human_review",
-            "collect_more": "collect_customer"
-        }
-    )
-    
-    # Connect human review to resolution
-    workflow.add_edge("human_review", "resolve")
-    
-    # Final resolution leads to END
-    workflow.add_edge("resolve", END)
-    
-    # Compile the workflow
-    return workflow.compile()
+    return workflow
 
-def run_packaging_dispute_workflow(dispute_details: str = "Customer reports damaged packaging with food spillage") -> Dict[str, Any]:
+# Main function for managing packaging disputes
+def manage_packaging_dispute(state: DisputeState) -> Command[Literal["grab_food"]]:
     """
-    Runs the packaging dispute resolution workflow with the given dispute details.
+    Handle situations where there's a dispute about damaged packaging during delivery.
+    Uses a sophisticated LangGraph workflow with proper nodes and edges for intelligent resolution.
     
     Args:
-        dispute_details: Description of the packaging dispute
+        state: The current state including messages
         
     Returns:
-        The final state of the workflow execution
+        Command with the next routing destination
     """
-    # Create the workflow
-    workflow = manage_packaging_dispute(dispute_details)
+    # Extract dispute details from the messages if available
+    messages = state.messages
+    dispute_details = "Dispute regarding damaged packaging during food delivery"
     
-    # Create a memory saver for checkpointing
+    for message in messages:
+        if isinstance(message, HumanMessage) and "packaging" in message.content.lower():
+            dispute_details = message.content
+    
+    # Initialize the state if needed
+    if not hasattr(state, "dispute_details") or not state.dispute_details:
+        state.dispute_details = dispute_details
+    
+    # Build the graph
+    workflow = build_packaging_dispute_graph()
+    
+    # Create a memory saver to store the state between runs
     memory = MemorySaver()
     
-    # Execute the workflow
-    config = {"configurable": {"thread_id": "packaging_dispute_1"}}
+    # Compile the graph with the memory saver
+    app = workflow.compile(checkpointer=memory)
     
-    for event in workflow.stream({
-        "messages": [
-            SystemMessage(content=f"You are handling a packaging dispute: {dispute_details}"),
-            HumanMessage(content=dispute_details)
-        ],
-        "dispute_stage": "initiate",
-    }, config=config):
-        # This would normally display progress or allow for interaction
-        # In a real application, you could implement checkpointing or visualization here
-        pass
+    # Run the graph
+    result = app.invoke(state)
     
-    # Get the final state
-    result = workflow.get_state(config)
+    # Return the command to route to the parent agent
+    return Command(
+        goto=result.next,
+        update={
+            "next": result.next,
+            "messages": result.messages,
+            "customer_evidence": result.customer_evidence,
+            "driver_evidence": result.driver_evidence,
+            "analysis_result": result.analysis_result,
+            "resolution": result.resolution,
+            "actions_taken": result.actions_taken,
+            "status": result.status
+        }
+    )
+
+# Function for testing and demonstration purposes
+def run_packaging_dispute_workflow(dispute_details: str) -> DisputeState:
+    """
+    Run the packaging dispute resolution workflow with the given dispute details.
+    This function is primarily for testing and demonstration purposes.
+    
+    Args:
+        dispute_details: Details of the packaging dispute
+        
+    Returns:
+        The final state after resolution
+    """
+    # Initialize state
+    initial_state = DisputeState(
+        messages=[HumanMessage(content=dispute_details)],
+        dispute_details=dispute_details
+    )
+    
+    # Build the graph
+    workflow = build_packaging_dispute_graph()
+    
+    # Create a memory saver
+    memory = MemorySaver()
+    
+    # Compile the graph
+    app = workflow.compile(checkpointer=memory)
+    
+    # Run the workflow
+    result = app.invoke(initial_state)
     
     return result
 
-# Example usage:
-# if __name__ == "__main__":
-#     result = run_packaging_dispute_workflow("My food delivery arrived with torn packaging and food spilled in the bag.")
-#     for message in result["messages"]:
-#         print(f"{message.type}: {message.content[:100]}...")
-    
-    # Return to grab_food after handling the dispute
-    goto = "grab_food"
-    return Command(goto=goto, update={"next": goto})
+# When this module is imported, this will be available
+def get_tools():
+    """Return the tools from this module."""
+    return [
+        initiate_mediation_flow, 
+        collect_evidence_from_customer,
+        collect_evidence_from_driver,
+        issue_instant_refund,
+        exonerate_driver,
+        log_merchant_packaging_feedback,
+        notify_resolution
+    ]
+
