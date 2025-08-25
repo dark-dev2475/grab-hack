@@ -1,6 +1,5 @@
 """
-Customer communication module for Grab Food service.
-Handles all communications with customers after issues are resolved.
+Communication module for Grab Food service. the grabfood agent will use this function or say agent to communicate  thaat issue has been addressed to the addministartor and customer and asking for feedbakc from the custmer.
 Uses LangGraph with proper state management.
 """
 
@@ -96,60 +95,403 @@ def offer_promotional_voucher(customer_id: str, amount: float, expiry_days: int)
         "expiry_date": f"2025-08-{22 + expiry_days}T23:59:59Z"
     }
 
-def communicate(state: MessagesState) -> Command[Literal['grab_food']]:
-    """Enhanced communication with personalization"""
-    # Create a more detailed system message
-    system_message = """
-    You are a Grab Food customer communication agent.
+def communication_analyzer(state: CommunicationState) -> CommunicationState:
+    """
+    Main analysis function for the communication agent.
+    Analyzes the current state and determines next actions for customer communication.
+    
+    Args:
+        state: Current communication state
+        
+    Returns:
+        Updated state with next actions determined
+    """
+    # Get the current communication stage
+    current_stage = state.communication_stage
+    
+    # System prompt for the LLM
+    system_prompt = """
+    You are a Grab Food customer communication specialist.
     
     Your task is to provide personalized, empathetic communication tailored to:
     1. The specific issue the customer experienced
-    2. Their order history and loyalty status
+    2. The resolution that was implemented
     3. The severity of the inconvenience they faced
-    4. Their communication preferences
     
     Generate personalized messages that:
-    - Address the customer by name
+    - Address the customer by name when available
     - Reference specific details of their issue
     - Acknowledge any inconvenience in a genuine way
     - Provide clear information about resolutions
-    - End with a forward-looking, positive note
+    - End with a forward-looking, positive note and request for feedback
     
-    Use the available tools to complete these tasks efficiently.
+    Be thorough, empathetic, and focused on rebuilding customer trust.
     """
     
-    # Extract more context from messages
-    last_messages = state["messages"][-3:] if len(state["messages"]) >= 3 else state["messages"]
-    issue_description = " ".join([m.content for m in last_messages if hasattr(m, 'content')])
+    # Extract context from messages
+    issue_description = "a service issue"
     
-    # Get customer data (simulated)
-    customer_id = "cust-12345"
-    order_id = "order-67890"
-    customer_name = "Alex"  # Would come from real customer data
+    for message in state.messages:
+        if hasattr(message, 'content') and isinstance(message.content, str):
+            if "issue" in message.content.lower() or "problem" in message.content.lower():
+                issue_description = message.content
+                break
     
-    # Analyze issue severity from message content (simplified)
-    is_severe = "spillage" in issue_description or "delay" in issue_description
+    # Create human message based on current stage
+    if current_stage == "initial":
+        human_message = f"""
+        We need to communicate with a customer about a resolved issue: {issue_description}
+        
+        Please analyze this situation and draft an appropriate communication plan.
+        We need to inform both the customer and administrator that the issue has been addressed,
+        and we should request feedback from the customer.
+        """
+        
+        # Add this message to the state
+        state.messages.append(HumanMessage(content=human_message))
+        
+        # Generate the LLM response using the prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_prompt),
+            MessagesPlaceholder(variable_name="messages")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({"messages": state.messages})
+        
+        # Add the AI's analysis to the message history
+        state.messages.append(AIMessage(content=response))
+        
+        # Update state to move to the next stage
+        state.communication_stage = "send_notification"
+        
+        # Print CLI output to show chain of thought
+        print("\n🧠 COMMUNICATION ANALYSIS")
+        print("-" * 80)
+        print(response[:200] + "..." if len(response) > 200 else response)
+        print("-" * 80)
+        
+    elif current_stage == "send_notification":
+        # We're ready to send the notification
+        # Extract customer data (simulated in real implementation this would come from the database)
+        customer_id = state.customer_id or "cust-12345"
+        customer_name = "Valued Customer"  # Would come from real customer data
+        
+        # Create message for sending notification
+        human_message = f"""
+        Now that we've analyzed the situation, please draft a personalized message to send to the customer.
+        The message should inform them that their issue ({issue_description}) has been resolved,
+        and should ask for their feedback on our resolution process.
+        """
+        
+        # Add this message to the state
+        state.messages.append(HumanMessage(content=human_message))
+        
+        # Generate the LLM response
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_prompt),
+            MessagesPlaceholder(variable_name="messages")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({"messages": state.messages})
+        
+        # Add the AI's message to the history
+        state.messages.append(AIMessage(content=response))
+        
+        # Update state to move to the survey stage
+        state.communication_stage = "issue_survey"
+        
+        # Print CLI output to show chain of thought
+        print("\n✉️ CUSTOMER NOTIFICATION DRAFTED")
+        print("-" * 80)
+        print(response[:200] + "..." if len(response) > 200 else response)
+        print("-" * 80)
+        
+    elif current_stage == "issue_survey":
+        # We're ready to issue a satisfaction survey
+        human_message = """
+        Please recommend if we should issue a satisfaction survey to the customer
+        and if we should offer a promotional voucher based on the severity of their issue.
+        """
+        
+        # Add this message to the state
+        state.messages.append(HumanMessage(content=human_message))
+        
+        # Generate the LLM response
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_prompt),
+            MessagesPlaceholder(variable_name="messages")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({"messages": state.messages})
+        
+        # Add the AI's recommendation to the history
+        state.messages.append(AIMessage(content=response))
+        
+        # Update state to move to the voucher stage
+        state.communication_stage = "offer_voucher"
+        
+        # Print CLI output to show chain of thought
+        print("\n📋 SURVEY RECOMMENDATION")
+        print("-" * 80)
+        print(response[:200] + "..." if len(response) > 200 else response)
+        print("-" * 80)
+        
+    elif current_stage == "offer_voucher":
+        # We're ready to consider offering a voucher
+        human_message = """
+        Based on all our interactions, please provide a final recommendation 
+        on whether to offer a promotional voucher to the customer.
+        If yes, recommend an appropriate amount based on the severity of the issue.
+        """
+        
+        # Add this message to the state
+        state.messages.append(HumanMessage(content=human_message))
+        
+        # Generate the LLM response
+        prompt = ChatPromptTemplate.from_messages([
+            SystemMessage(content=system_prompt),
+            MessagesPlaceholder(variable_name="messages")
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        response = chain.invoke({"messages": state.messages})
+        
+        # Add the AI's recommendation to the history
+        state.messages.append(AIMessage(content=response))
+        
+        # Update state to completed
+        state.communication_stage = "completed"
+        
+        # Print CLI output to show chain of thought
+        print("\n🎁 VOUCHER RECOMMENDATION")
+        print("-" * 80)
+        print(response[:200] + "..." if len(response) > 200 else response)
+        print("-" * 80)
     
-    # Generate personalized message
-    personalized_message = f"Hello {customer_name}, we've resolved your issue regarding {issue_description}. "
-    if is_severe:
-        personalized_message += "We understand this significantly impacted your experience and sincerely apologize. "
-    personalized_message += "Thank you for your patience throughout this process."
+    # Return the updated state
+    return state
+
+def send_notification_node(state: CommunicationState) -> CommunicationState:
+    """
+    Sends a notification to the customer about the resolution.
     
-    # Send tailored notification
-    notification_result = send_resolution_notification(
-        customer_id=customer_id,
-        message=personalized_message
-    )
+    Args:
+        state: Current communication state
+        
+    Returns:
+        Updated state with notification sent
+    """
+    # Extract the most recent AI message for the notification content
+    notification_message = "Your issue has been resolved. Thank you for your patience."
     
-    # Offer larger voucher for severe issues
+    for i in range(len(state.messages) - 1, -1, -1):
+        if isinstance(state.messages[i], AIMessage):
+            notification_message = state.messages[i].content
+            break
+    
+    # Get customer ID from state or use default
+    customer_id = state.customer_id or "cust-12345"
+    
+    # Call the tool to send the notification
+    result = send_resolution_notification(customer_id, notification_message)
+    
+    # Add the result to messages
+    state.messages.append(FunctionMessage(
+        content=f"Notification sent to customer {customer_id}",
+        name="send_resolution_notification"
+    ))
+    
+    # Print CLI output
+    print("\n✉️ NOTIFICATION SENT")
+    print("-" * 80)
+    print(f"To: Customer {customer_id}")
+    print(f"Message: {notification_message[:100]}..." if len(notification_message) > 100 else notification_message)
+    print("-" * 80)
+    
+    return state
+
+def issue_survey_node(state: CommunicationState) -> CommunicationState:
+    """
+    Issues a satisfaction survey to the customer.
+    
+    Args:
+        state: Current communication state
+        
+    Returns:
+        Updated state with survey issued
+    """
+    # Get customer and order IDs from state or use defaults
+    customer_id = state.customer_id or "cust-12345"
+    order_id = state.order_id or "order-67890"
+    
+    # Call the tool to issue the survey
+    result = issue_satisfaction_survey(customer_id, order_id)
+    
+    # Add the result to messages
+    state.messages.append(FunctionMessage(
+        content=f"Satisfaction survey issued to customer {customer_id} for order {order_id}",
+        name="issue_satisfaction_survey"
+    ))
+    
+    # Print CLI output
+    print("\n📋 SURVEY ISSUED")
+    print("-" * 80)
+    print(f"Survey ID: {result['survey_id']}")
+    print(f"Expiry: {result['expiry']}")
+    print("-" * 80)
+    
+    return state
+
+def offer_voucher_node(state: CommunicationState) -> CommunicationState:
+    """
+    Offers a promotional voucher to the customer as goodwill.
+    
+    Args:
+        state: Current communication state
+        
+    Returns:
+        Updated state with voucher offered
+    """
+    # Get customer ID from state or use default
+    customer_id = state.customer_id or "cust-12345"
+    
+    # Determine voucher amount based on issue severity
+    # This would be more sophisticated in a real implementation
+    issue_description = ""
+    for message in state.messages:
+        if hasattr(message, 'content') and isinstance(message.content, str):
+            if "issue" in message.content.lower() or "problem" in message.content.lower():
+                issue_description = message.content
+                break
+    
+    is_severe = "spill" in issue_description.lower() or "delay" in issue_description.lower()
     voucher_amount = 10.00 if is_severe else 5.00
-    voucher_result = offer_promotional_voucher(
-        customer_id=customer_id,
-        amount=voucher_amount,
-        expiry_days=7
+    
+    # Call the tool to offer the voucher
+    result = offer_promotional_voucher(customer_id, voucher_amount, 7)
+    
+    # Add the result to messages
+    state.messages.append(FunctionMessage(
+        content=f"Promotional voucher of ${voucher_amount} offered to customer {customer_id}",
+        name="offer_promotional_voucher"
+    ))
+    
+    # Print CLI output
+    print("\n🎁 VOUCHER OFFERED")
+    print("-" * 80)
+    print(f"Voucher code: {result['voucher_code']}")
+    print(f"Amount: ${voucher_amount}")
+    print(f"Expiry: {result['expiry_date']}")
+    print("-" * 80)
+    
+    return state
+
+def router(state: CommunicationState) -> str:
+    """
+    Routes to the appropriate node based on the current communication stage.
+    
+    Args:
+        state: Current communication state
+        
+    Returns:
+        Name of the next node to execute
+    """
+    # Get the current communication stage
+    current_stage = state.communication_stage
+    
+    # Print routing decision
+    print("\n🧭 COMMUNICATION ROUTER")
+    print(f"Current stage: {current_stage}")
+    
+    # Route based on the current stage
+    if current_stage == "send_notification":
+        print("Routing to: send_notification_node")
+        return "send_notification_node"
+    elif current_stage == "issue_survey":
+        print("Routing to: issue_survey_node")
+        return "issue_survey_node"
+    elif current_stage == "offer_voucher":
+        print("Routing to: offer_voucher_node")
+        return "offer_voucher_node"
+    elif current_stage == "completed":
+        print("Communication flow completed. Returning to main orchestrator.")
+        return END
+    else:
+        # Default to analyzer for any other stage
+        print("Routing to: communication_analyzer")
+        return "communication_analyzer"
+
+def communicate(state: MessagesState) -> Command[Literal['grab_food']]:
+    """
+    Main function for customer communication.
+    Creates and runs the workflow for personalized customer communication.
+    
+    Args:
+        state: Initial state including messages about the issue
+        
+    Returns:
+        Command with the next routing destination
+    """
+    # Create a proper CommunicationState from the MessagesState
+    comm_state = CommunicationState(
+        messages=state.messages,
+        communication_stage="initial"
     )
     
-    # Return to grab_food after handling the communication
+    # Extract issue details from messages if available
+    for message in state.messages:
+        if hasattr(message, 'content') and isinstance(message.content, str):
+            if "issue" in message.content.lower() or "problem" in message.content.lower():
+                comm_state.issue_type = message.content
+                break
+    
+    # Print workflow start
+    print("\n🚀 STARTING COMMUNICATION WORKFLOW")
+    print("-" * 80)
+    
+    # Create the workflow graph
+    workflow = StateGraph(CommunicationState)
+    
+    # Add nodes to the graph
+    workflow.add_node("communication_analyzer", communication_analyzer)
+    workflow.add_node("send_notification_node", send_notification_node)
+    workflow.add_node("issue_survey_node", issue_survey_node)
+    workflow.add_node("offer_voucher_node", offer_voucher_node)
+    
+    # Add conditional edges from the analyzer based on the router
+    workflow.add_conditional_edges(
+        "communication_analyzer",
+        router,
+        {
+            "send_notification_node": "send_notification_node",
+            "issue_survey_node": "issue_survey_node",
+            "offer_voucher_node": "offer_voucher_node",
+            END: END
+        }
+    )
+    
+    # Add edges from other nodes back to the analyzer
+    workflow.add_edge("send_notification_node", "communication_analyzer")
+    workflow.add_edge("issue_survey_node", "communication_analyzer")
+    workflow.add_edge("offer_voucher_node", "communication_analyzer")
+    
+    # Set the entry point
+    workflow.set_entry_point("communication_analyzer")
+    
+    # Compile the workflow
+    app = workflow.compile()
+    
+    # Execute the workflow
+    result = app.invoke(comm_state)
+    
+    # Print workflow completion
+    print("\n✅ COMMUNICATION WORKFLOW COMPLETED")
+    print(f"Final stage: {result.communication_stage}")
+    print("-" * 80)
+    
+    # Return to the grab_food orchestrator
     goto = "grab_food"
     return Command(goto=goto, update={"next": goto})

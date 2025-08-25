@@ -156,32 +156,56 @@ def run_packaging_dispute(dispute_details: str = "Packaging was damaged and food
     """Run the packaging dispute scenario directly."""
     print_color("\n🚀 Running Packaging Dispute Scenario", "magenta")
     print_color(f"Dispute: {dispute_details}", "yellow")
+    print_color("=" * 80, "magenta")
     
     try:
-        # Create a simulated state with the dispute details
-        initial_state = MessagesState(
-            messages=[
-                SystemMessage(content=f"You are handling a packaging dispute: {dispute_details}"),
-                HumanMessage(content=dispute_details)
-            ],
-            dispute_stage="initiate"
-        )
-        
         # Import the function here to avoid circular imports
-        from agents.food.damage import manage_packaging_dispute
-        result = manage_packaging_dispute(initial_state)
+        from agents.food.damage import run_packaging_dispute_workflow
         
-        if verbose:
-            # Display dispute resolution details
-            print_color("\n📊 Dispute Resolution:", "blue")
-            print_color(f"Next step: {result.goto}", "yellow")
-            print_color(f"Updates: {result.updates}", "cyan")
-        else:
-            # Just display the resolution
-            print_color("\n🏁 Dispute Resolution:", "green")
-            print_color(f"Next step: {result.goto}", "yellow")
+        # Run the workflow with the dispute details
+        print_color("\n🔍 Starting dispute resolution process...", "cyan")
+        result = run_packaging_dispute_workflow(dispute_details)
+        
+        # The run_packaging_dispute_workflow function already prints detailed output
+        # We'll add a summary of the resolution here
+        
+        print_color("\n📊 DISPUTE RESOLUTION SUMMARY", "green")
+        print_color("=" * 80, "green")
+        
+        # Print final resolution
+        if hasattr(result, 'resolution') and result.resolution:
+            print_color("\n📝 Final Resolution:", "yellow")
+            print_color(result.resolution, "white")
+        
+        # Print responsibility determination
+        if hasattr(result, 'analysis_result') and result.analysis_result:
+            analysis = result.analysis_result
+            print_color("\n🧠 Responsibility Analysis:", "yellow")
+            print_color(f"Responsible Party: {analysis.get('responsibility', 'Unknown')}", "cyan")
+            print_color(f"Confidence Level: {analysis.get('confidence', 0.0)}", "cyan")
+            
+            # Print reasoning (truncated if too long)
+            reasoning = analysis.get('reasoning', 'No reasoning provided')
+            if len(reasoning) > 200:
+                reasoning = reasoning[:197] + "..."
+            print_color(f"Reasoning: {reasoning}", "white")
+        
+        # Print actions taken
+        if hasattr(result, 'actions_taken') and result.actions_taken:
+            print_color("\n�️ Actions Taken:", "yellow")
+            for action in result.actions_taken:
+                action_name = action.get('action', 'unknown')
+                print_color(f"• {action_name}", "cyan")
+                
+                # If there's a result dictionary, print relevant details
+                if isinstance(action.get('result'), dict):
+                    result_dict = action.get('result', {})
+                    for key, value in result_dict.items():
+                        if key not in ['status', 'timestamp', 'dispute_details'] and not isinstance(value, dict):
+                            print_color(f"  - {key}: {value}", "white")
         
         print_color("\n✅ Packaging dispute handling completed", "green")
+        print_color("=" * 80, "green")
         
     except Exception as e:
         print_color(f"\n❌ Error running packaging dispute: {str(e)}", "red")
